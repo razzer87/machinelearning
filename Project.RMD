@@ -1,0 +1,117 @@
+---
+title: "README"
+output: html_document
+---
+
+# Data Loading and partition
+
+The code below downloaded the data to a temporary file. Once downloaded, it was read it into R and a 70/30 partition was created to serve as the training and test data sets.
+
+```{r download}
+library(caret)
+
+# create temp file and dnowload the data to it
+temp <- tempfile()
+download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",temp)
+data <- read.csv(file=temp, na.strings=c("NA", ""))
+
+# set seed for reporducibilty and partition the data set
+set.seed(1987)
+train <- createDataPartition(y=data$classe, p=0.7, list=FALSE)
+training <- data[train, ]
+test <- data[-train, ]
+```
+
+# Initial Exploratory Analysis
+
+A quick check of the outcome variables shows the presence of 5 categories. These are more or less equally represented within the training set.
+
+```{r table, results='asis'}
+# xtable package used to make pleasing looking tables
+library(xtable)
+table <- table(training$classe)
+xt <- xtable(table)
+print(xt, type="html",include.colnames=FALSE)
+```
+
+Glancing over the data, it was found that many of the predictor columns were mainly NA values. It was decided that due to the lack of data that these would be removed from the training set.
+
+```{r removeNAs}
+training <- training[ ,apply(training, 2, function(x) sum(is.na(x)) == 0)]
+```
+
+The first 7 columns of the data frame contain tracking details such as time of measurement, name of subject and the window the measurement occurred in. These details should not effect the class and even if it did it would depend on the behavior of the specific subject, so it was decided that these would be removed in order to make a general model.
+
+```{r removeclassifercolumns}
+training <- training[ ,8:ncol(training)]
+```
+
+Next a matrix to assess pair-wise correlation was built.
+
+```{r correlationmatrix}
+matrix <- cor(training[ ,1:ncol(training)-1])
+# plot matrix with 'image' function
+image(1:ncol(matrix), 1:ncol(matrix), matrix, xaxt="n", xlab="", yaxt="n", ylab="", main="Predictor Correlation Matrix")
+for(i in 1:ncol(matrix)) {
+  for(j in 1:nrow(matrix)) {
+    text(i,j,labels=format(matrix[i,j], digits=2), cex=0.3)
+  }
+}
+axis(side=1, at=seq(1,ncol(matrix),by=1), labels=colnames(matrix), cex.axis=0.5, las=2)
+axis(side=2, at=seq(1, nrow(matrix), by=1), labels=rownames(matrix), cex.axis=0.5, las=2)
+```
+
+A number of these are highly correlated. It was decided to remove variables if they were more than 0.9 correlation with another variable.
+
+```{r corremove}
+# identify pairs with >0.9 high correlation
+high.corr <- findCorrelation(matrix, cutoff = 0.9)
+# remove highly correlated descriptors
+training <- training[, -high.corr]
+```
+
+# Model construction
+
+Due to the large number of predictors it was decided to build a model based on random forest analysis. In order to speed up the model, the doParallel package was used to detect the additional data cores on the user's machine.
+
+```{r randomforest}
+library("doParallel")
+registerDoParallel(cores=detectCores())
+
+model <- train(classe ~ ., data=training, method="rf", trControl = trainControl(method = "cv", number = 4, allowParallel = TRUE))
+
+# print final model
+model$finalModel
+```
+
+# Finding the error in the Model
+
+To find the out-of-sample error, the model was applied to the "test"" dataset created through partitioning earlier. The error was assessed via a confusion matrix. The results are shown below.
+
+```{r error}
+confusionMatrix(predict(model,newdata=test), test$classe)
+
+```
+
+The accuracy according to the above model is 99.3%. This means that the out-of-sample error can be taken as 0.7%.
+
+# Applying model to the validation cases
+
+Loading the secondary data set from the assignment page and applying the model to each entry correctly identified all 20  cases.
+
+```{r results,results='asis'}
+temp <- tempfile()
+download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",temp)
+
+validation.cases <- read.csv(file=temp, na.strings=c("NA", ""))
+
+results <- predict(model, newdata=validation.cases)
+results.table <- data.frame(results)
+rownames(results.table) <- 1:20
+xt <- xtable(t(results.table))
+print(xt, type="html",include.rownames=FALSE)
+```
+
+# Summary
+
+Using a random forest model on the supplied data set, a model with an estimated out-of-sample error rate of 0.7% was constructed. The validation set's 20 cases were all correctly identified.
